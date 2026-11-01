@@ -654,20 +654,45 @@ class TransferController extends Controller
         } catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::error('PalmPay payout execution error: ' . $e->getMessage());
 
+            $rawMsg = $e->getMessage();
+            $lower = strtolower($rawMsg);
+
+            $isVendorDepleted = str_contains($lower, 'balance is insufficient') ||
+                str_contains($lower, 'insufficient balance') ||
+                str_contains($lower, 'account balance is insufficient') ||
+                str_contains($lower, 'insufficient funds') ||
+                str_contains($lower, 'fund your wallet') ||
+                str_contains($lower, 'balance not enough');
+
+            if ($isVendorDepleted) {
+                \Illuminate\Support\Facades\Log::critical("PALMPAY PRIMARY WALLET DEPLETED: Payout failed for user #{$user->id} ({$user->email}) due to insufficient PalmPay merchant float. Raw: '{$rawMsg}'.");
+            }
+
+            // Customer-friendly message and sanitized transaction description
+            if ($isVendorDepleted || str_contains($lower, 'temporarily unavailable')) {
+                $userMessage = 'Bank transfer service is temporarily unavailable. Please try again shortly.';
+                $txFailureReason = 'Gateway temporarily unavailable';
+            } else {
+                $userMessage = str_starts_with($rawMsg, 'Transfer ') || str_starts_with($rawMsg, 'Bank ')
+                    ? $rawMsg
+                    : 'Transfer could not be processed: ' . $rawMsg;
+                $txFailureReason = $rawMsg;
+            }
+
             // Auto-refund user immediately on gateway failure under lock
-            DB::transaction(function () use ($user, $totalDebit, $transaction, $e) {
+            DB::transaction(function () use ($user, $totalDebit, $transaction, $txFailureReason) {
                 $lockedUser = User::where('id', $user->id)->lockForUpdate()->first();
                 if ($lockedUser) {
                     $lockedUser->increment('wallet_balance', $totalDebit);
                 }
                 $transaction->update([
                     'status' => 'failed',
-                    'description' => $transaction->description . ' (Failed: ' . $e->getMessage() . ')',
+                    'description' => $transaction->description . ' (Failed: ' . $txFailureReason . ')',
                 ]);
             });
 
             return response()->json([
-                'message' => 'Transfer could not be processed: ' . $e->getMessage(),
+                'message' => $userMessage,
             ], 422);
         }
     }

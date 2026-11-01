@@ -622,6 +622,20 @@ class PalmPayService
 
         if (!in_array($respCode, ['00000000', '000000', 'SUCCESS', '00'], true)) {
             Log::warning("PalmPay payout rejected [{$respCode}]: {$respMsg}");
+
+            $lower = strtolower($respMsg);
+            if (
+                str_contains($lower, 'balance is insufficient') ||
+                str_contains($lower, 'insufficient balance') ||
+                str_contains($lower, 'account balance is insufficient') ||
+                str_contains($lower, 'insufficient funds') ||
+                str_contains($lower, 'fund your wallet') ||
+                str_contains($lower, 'balance not enough')
+            ) {
+                Log::critical("PALMPAY MASTER WALLET DEPLETED: PalmPay merchant primary wallet balance is insufficient for payout. OrderId: {$reference}, RespCode: {$respCode}, RespMsg: {$respMsg}. Admin must fund the PalmPay master wallet immediately.");
+                throw new \RuntimeException('Bank transfer service is temporarily unavailable. Please try again shortly.');
+            }
+
             throw new \RuntimeException($respMsg ?: 'Destination bank rejected transfer request.');
         }
 
@@ -633,6 +647,20 @@ class PalmPayService
         if ($orderStatus === 3) {
             $err = $response->json('data.errorMsg') ?: $response->json('data.message') ?: 'Transfer failed at destination bank.';
             Log::warning("PalmPay payout failed at bank: {$err}");
+
+            $lowerErr = strtolower($err);
+            if (
+                str_contains($lowerErr, 'balance is insufficient') ||
+                str_contains($lowerErr, 'insufficient balance') ||
+                str_contains($lowerErr, 'account balance is insufficient') ||
+                str_contains($lowerErr, 'insufficient funds') ||
+                str_contains($lowerErr, 'fund your wallet') ||
+                str_contains($lowerErr, 'balance not enough')
+            ) {
+                Log::critical("PALMPAY MASTER WALLET DEPLETED: PalmPay merchant primary wallet balance is insufficient for payout. OrderId: {$reference}, Error: {$err}. Admin must fund the PalmPay master wallet immediately.");
+                throw new \RuntimeException('Bank transfer service is temporarily unavailable. Please try again shortly.');
+            }
+
             throw new \RuntimeException($err);
         }
 

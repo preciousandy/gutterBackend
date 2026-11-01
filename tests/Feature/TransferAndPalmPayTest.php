@@ -424,4 +424,58 @@ class TransferAndPalmPayTest extends TestCase
         $this->assertEquals(38000, (float) $sender->fresh()->wallet_balance);
         $this->assertEquals(17000, (float) $recipient->fresh()->wallet_balance);
     }
+
+    public function test_bank_transfer_sanitizes_error_when_palmpay_master_wallet_is_depleted(): void
+    {
+        $sender = User::factory()->create([
+            'kyc_status' => 'verified',
+            'status' => 'active',
+            'wallet_balance' => 50000,
+            'pin' => Hash::make('1122'),
+            'has_pin' => true,
+            'tier' => 2,
+        ]);
+
+        // Mock PalmPayService to simulate PalmPay responding with "Account balance is insufficient"
+        $mockPalmPay = \Mockery::mock(\App\Services\PalmPayService::class);
+        $mockPalmPay->shouldReceive('verifyBankAccount')
+            ->once()
+            ->andReturn([
+                'account_name' => 'EMMANUEL NWOSU',
+                'account_number' => '0123456789',
+                'bank_code' => '044',
+            ]);
+        $mockPalmPay->shouldReceive('getBanks')
+            ->andReturn([
+                ['code' => '044', 'name' => 'Access Bank'],
+            ]);
+        $mockPalmPay->shouldReceive('transferToBank')
+            ->once()
+            ->andThrow(new \RuntimeException('Account balance is insufficient'));
+
+        $this->app->instance(\App\Services\PalmPayService::class, $mockPalmPay);
+
+        $response = $this->actingAs($sender)->postJson('/api/v1/transfers', [
+            'type' => 'bank',
+            'bank_code' => '044',
+            'account_number' => '0123456789',
+            'amount' => 1000,
+            'pin' => '1122',
+            'description' => 'Test transfer',
+        ]);
+
+        $response->assertStatus(422)
+            ->assertJsonPath('message', 'Bank transfer service is temporarily unavailable. Please try again shortly.');
+
+        // User balance must be refunded immediately
+        $this->assertEquals(50000, (float) $sender->fresh()->wallet_balance);
+
+        // Transaction record must not expose "Account balance is insufficient"
+        $tx = $sender->transactions()->latest()->first();
+        $this->assertNotNull($tx);
+        $this->assertEquals('failed', $tx->status);
+        $this->assertStringNotContainsString('Account balance is insufficient', $tx->description);
+        $this->assertStringContainsString('Gateway temporarily unavailable', $tx->description);
+    }
 }
+
