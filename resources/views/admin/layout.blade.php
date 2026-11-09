@@ -818,6 +818,15 @@
             </div>
           </a>
 
+          <a href="{{ route('admin.crypto') }}" class="nav-btn {{ request()->routeIs('admin.crypto*') ? 'active' : '' }}">
+            <span class="icon-wrap">₿</span>
+            <div style="flex: 1; text-align: left;">
+              <div class="nav-label">Crypto & Quidax Hub</div>
+              <div class="nav-desc">Wallets, swaps, fees & refunds</div>
+            </div>
+            <span class="pill-badge" style="background-color: #7C3AED; color: #FFFFFF;">Quidax</span>
+          </a>
+
           @if($admin->canManageKyc() || $admin->role === 'support_lead')
           <a href="{{ route('admin.users') }}" class="nav-btn {{ request()->routeIs('admin.users') ? 'active' : '' }}">
             <span class="icon-wrap">👥</span>

@@ -116,7 +116,7 @@ Route::middleware(['auth:sanctum', 'throttle:api', 'account.active'])->group(fun
             ->middleware('throttle:6,1');
     });
 
-    // Crypto Platform (Deposit, Addresses, Market, Auto-convert, Buy/Sell Swaps)
+    // Crypto Platform (Deposit, Addresses, Market, Auto-convert, Buy/Sell Swaps, Withdrawals & History)
     Route::prefix('crypto')->group(function () {
         Route::get('/market', [CryptoController::class, 'market']);
         Route::get('/balances', [CryptoController::class, 'balances']);
@@ -124,11 +124,14 @@ Route::middleware(['auth:sanctum', 'throttle:api', 'account.active'])->group(fun
         Route::get('/addresses', [CryptoController::class, 'getAddresses']);
         Route::post('/quote', [CryptoController::class, 'quote']);
         Route::post('/orders', [CryptoController::class, 'placeOrder'])
-            ->middleware('account.not_frozen');
+            ->middleware(['throttle:crypto-trade', 'account.not_frozen']);
         Route::post('/receive/simulate', [CryptoController::class, 'simulateDeposit']);
         Route::get('/send/fee', [CryptoController::class, 'sendFee']);
+        Route::post('/validate-address', [CryptoController::class, 'validateAddress']);
         Route::post('/send', [CryptoController::class, 'send'])
-            ->middleware('account.not_frozen');
+            ->middleware(['throttle:crypto-withdraw', 'account.not_frozen']);
+        Route::get('/transactions', [CryptoController::class, 'history']);
+        Route::get('/transactions/{id}', [CryptoController::class, 'showTransaction']);
     });
 
     // Bills & Utilities (Airtime, Mobile Data & Electricity via Bigisub / VTpass)
@@ -182,6 +185,16 @@ Route::prefix('admin')->group(function () {
     // Staff RBAC Management
     Route::get('/staff', [\App\Http\Controllers\Api\AdminController::class, 'staff']);
     Route::post('/staff', [\App\Http\Controllers\Api\AdminController::class, 'storeStaff']);
+
+    // Crypto Fee Settings, Transaction Management, Refunds & Reconciliation
+    Route::get('/crypto/settings', [\App\Http\Controllers\Api\AdminController::class, 'cryptoSettings']);
+    Route::put('/crypto/settings/{serviceType}', [\App\Http\Controllers\Api\AdminController::class, 'updateCryptoSetting']);
+    Route::post('/crypto/settings/coins', [\App\Http\Controllers\Api\AdminController::class, 'updateCryptoCoinConfig']);
+    Route::get('/crypto/transactions', [\App\Http\Controllers\Api\AdminController::class, 'cryptoTransactions']);
+    Route::get('/crypto/transactions/{id}', [\App\Http\Controllers\Api\AdminController::class, 'showCryptoTransaction']);
+    Route::post('/crypto/transactions/{id}/status', [\App\Http\Controllers\Api\AdminController::class, 'updateCryptoTransactionStatus']);
+    Route::post('/crypto/transactions/{id}/refund', [\App\Http\Controllers\Api\AdminController::class, 'refundCryptoTransaction']);
+    Route::post('/crypto/reconcile', [\App\Http\Controllers\Api\AdminController::class, 'reconcileCrypto']);
 });
 
 

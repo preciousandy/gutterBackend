@@ -126,6 +126,26 @@ class AppServiceProvider extends ServiceProvider
             });
         });
 
+        // Crypto trade rate limit (max 10 requests per minute per user/IP)
+        RateLimiter::for('crypto-trade', function (Request $request) {
+            $identifier = $request->user()?->id ? 'user:'.$request->user()->id : 'ip:'.$request->ip();
+            return Limit::perMinute(10)->by($identifier)->response(function () {
+                return response()->json([
+                    'message' => 'Too many crypto exchange requests. Please wait a moment before trying again.',
+                ], 429);
+            });
+        });
+
+        // Crypto withdrawal anti-brute force protection (max 5 attempts per minute per user/IP)
+        RateLimiter::for('crypto-withdraw', function (Request $request) {
+            $identifier = $request->user()?->id ? 'user:'.$request->user()->id : 'ip:'.$request->ip();
+            return Limit::perMinute(5)->by($identifier)->response(function () {
+                return response()->json([
+                    'message' => 'Too many crypto withdrawal attempts. Please wait 1 minute before trying again.',
+                ], 429);
+            });
+        });
+
         // Share real-time notification counts across all Admin portal views
         \Illuminate\Support\Facades\View::composer(['admin.*'], function ($view) {
             try {

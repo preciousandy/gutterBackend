@@ -12,22 +12,33 @@ class CryptoDeposit extends Model
     protected $fillable = [
         'user_id',
         'tx_hash',
+        'quidax_deposit_id',
         'symbol',
         'network',
         'amount',
+        'confirmations',
+        'platform_fee',
+        'net_amount',
         'status',
         'converted_to_naira',
         'naira_amount',
         'rate',
+        'fee_config_snapshot',
+        'quidax_response',
     ];
 
     protected function casts(): array
     {
         return [
             'amount' => 'float',
+            'confirmations' => 'integer',
+            'platform_fee' => 'float',
+            'net_amount' => 'float',
             'converted_to_naira' => 'boolean',
             'naira_amount' => 'float',
             'rate' => 'float',
+            'fee_config_snapshot' => 'array',
+            'quidax_response' => 'array',
         ];
     }
 

@@ -39,6 +39,16 @@ Route::prefix('admin')->group(function () {
         // Transactions Ledger
         Route::get('/transactions', [AdminWebController::class, 'transactions'])->name('admin.transactions');
 
+        // Crypto Wallet, Exchange, Transactions & Refund Center
+        Route::get('/crypto', [AdminWebController::class, 'cryptoManagement'])->name('admin.crypto');
+        Route::post('/crypto/settings/{serviceType}', [AdminWebController::class, 'updateCryptoSetting'])->name('admin.crypto.settings.update');
+        Route::post('/crypto/coins', [AdminWebController::class, 'updateCryptoCoin'])->name('admin.crypto.coins.update');
+        Route::post('/crypto/quidax-config', [AdminWebController::class, 'updateQuidaxConfig'])->name('admin.crypto.quidax.update');
+        Route::get('/crypto/test-quidax', [AdminWebController::class, 'testQuidax'])->name('admin.crypto.quidax.test');
+        Route::post('/crypto/reconcile', [AdminWebController::class, 'reconcileCrypto'])->name('admin.crypto.reconcile');
+        Route::post('/crypto/transactions/{id}/status', [AdminWebController::class, 'updateCryptoTransactionStatus'])->name('admin.crypto.tx.status');
+        Route::post('/crypto/transactions/{id}/refund', [AdminWebController::class, 'refundCryptoTransaction'])->name('admin.crypto.tx.refund');
+
         // Customers & User Management
         Route::get('/users', [AdminWebController::class, 'users'])->name('admin.users');
         Route::put('/users/{id}', [AdminWebController::class, 'updateUser'])->name('admin.users.update');

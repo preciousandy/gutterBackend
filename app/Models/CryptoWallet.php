@@ -13,12 +13,15 @@ class CryptoWallet extends Model
         'user_id',
         'symbol',
         'balance',
+        'locked_balance',
+        'quidax_wallet_id',
     ];
 
     protected function casts(): array
     {
         return [
             'balance' => 'float',
+            'locked_balance' => 'float',
         ];
     }
 

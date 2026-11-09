@@ -371,11 +371,83 @@
       </div>
     </div>
     <div class="channel-amount">₦{{ number_format($cryptoVolume, 2) }}</div>
-    <div class="channel-status">
-      <span class="online-dot"></span> Active Live
+    <div style="display: flex; align-items: center; justify-content: space-between;">
+      <div class="channel-status">
+        <span class="online-dot"></span> Active Live
+      </div>
+      <a href="{{ route('admin.crypto') }}" style="font-size: 11px; font-weight: 700; color: var(--navy); text-decoration: none;">Manage Crypto &rarr;</a>
     </div>
   </div>
 </div>
+
+@if(isset($cryptoMetrics))
+<!-- Crypto & Quidax Executive Summary -->
+<div style="display: flex; align-items: center; justify-content: space-between; margin: 28px 0 14px 0;">
+  <div>
+    <h2 style="font-size: 16px; font-weight: 800; color: var(--navy-deep);">Cryptocurrency & Quidax Exchange Summary</h2>
+    <p style="font-size: 12px; color: var(--ink-soft);">Deposits, withdrawals, Naira conversions, crypto purchases, platform fees, and refund metrics</p>
+  </div>
+  <a href="{{ route('admin.crypto') }}" style="display: flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 10px; background-color: var(--navy); color: #FFFFFF; font-size: 12.5px; font-weight: 700; text-decoration: none;">
+    <span>₿ Open Crypto Command & Refunds &rarr;</span>
+  </a>
+</div>
+
+<div class="status-grid" style="margin-bottom: 28px;">
+  <a href="{{ route('admin.crypto', ['type' => 'receive_crypto']) }}" class="status-kpi-card">
+    <div class="status-kpi-top">
+      <span class="status-kpi-title">Total Crypto Deposits</span>
+      <div class="status-kpi-icon" style="background-color: #ECFDF5; color: #059669;">📥</div>
+    </div>
+    <div class="status-kpi-value">₦{{ number_format($cryptoMetrics['total_deposits_ngn'] ?? 0, 2) }}</div>
+    <div class="status-kpi-desc">{{ $cryptoMetrics['total_deposits_count'] ?? 0 }} confirmed deposits</div>
+  </a>
+
+  <a href="{{ route('admin.crypto', ['type' => 'send_crypto']) }}" class="status-kpi-card">
+    <div class="status-kpi-top">
+      <span class="status-kpi-title">Total Withdrawals</span>
+      <div class="status-kpi-icon" style="background-color: #EFF6FF; color: #2563EB;">📤</div>
+    </div>
+    <div class="status-kpi-value">₦{{ number_format($cryptoMetrics['total_withdrawals_ngn'] ?? 0, 2) }}</div>
+    <div class="status-kpi-desc">{{ $cryptoMetrics['total_withdrawals_count'] ?? 0 }} crypto payouts</div>
+  </a>
+
+  <a href="{{ route('admin.crypto', ['type' => 'buy_crypto']) }}" class="status-kpi-card">
+    <div class="status-kpi-top">
+      <span class="status-kpi-title">Crypto Purchases</span>
+      <div class="status-kpi-icon" style="background-color: #F5F3FF; color: #7C3AED;">🛒</div>
+    </div>
+    <div class="status-kpi-value">₦{{ number_format($cryptoMetrics['total_purchases_ngn'] ?? 0, 2) }}</div>
+    <div class="status-kpi-desc">{{ $cryptoMetrics['total_purchases_count'] ?? 0 }} NGN-to-Crypto buys</div>
+  </a>
+
+  <a href="{{ route('admin.crypto', ['type' => 'convert_to_naira']) }}" class="status-kpi-card">
+    <div class="status-kpi-top">
+      <span class="status-kpi-title">Crypto-to-Naira Swaps</span>
+      <div class="status-kpi-icon" style="background-color: #FEF3C7; color: #D97706;">🔄</div>
+    </div>
+    <div class="status-kpi-value">₦{{ number_format($cryptoMetrics['total_conversions_ngn'] ?? 0, 2) }}</div>
+    <div class="status-kpi-desc">{{ $cryptoMetrics['total_conversions_count'] ?? 0 }} conversions settled</div>
+  </a>
+
+  <a href="{{ route('admin.crypto', ['tab' => 'settings']) }}" class="status-kpi-card">
+    <div class="status-kpi-top">
+      <span class="status-kpi-title">Platform Fees Earned</span>
+      <div class="status-kpi-icon" style="background-color: #E8FBF4; color: #0FA97F;">💎</div>
+    </div>
+    <div class="status-kpi-value">₦{{ number_format($cryptoMetrics['total_platform_fees_ngn'] ?? 0, 2) }}</div>
+    <div class="status-kpi-desc">Net crypto fee revenue</div>
+  </a>
+
+  <a href="{{ route('admin.crypto', ['status' => 'pending']) }}" class="status-kpi-card">
+    <div class="status-kpi-top">
+      <span class="status-kpi-title">Pending / Failed / Refunds</span>
+      <div class="status-kpi-icon" style="background-color: #FFE4E6; color: #E11D48;">🛡️</div>
+    </div>
+    <div class="status-kpi-value">{{ $cryptoMetrics['pending_transactions_count'] ?? 0 }} / {{ $cryptoMetrics['failed_transactions_count'] ?? 0 }}</div>
+    <div class="status-kpi-desc">{{ $cryptoMetrics['refund_totals_count'] ?? 0 }} refunds (₦{{ number_format($cryptoMetrics['refund_totals_ngn'] ?? 0, 2) }})</div>
+  </a>
+</div>
+@endif
 
 <!-- Recent Transactions Table Card -->
 <div class="card">

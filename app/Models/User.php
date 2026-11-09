@@ -163,5 +163,29 @@ class User extends Authenticatable
     {
         return $this->hasMany(CryptoDeposit::class);
     }
+
+    /**
+     * Get the crypto transactions for the user.
+     */
+    public function cryptoTransactions()
+    {
+        return $this->hasMany(CryptoTransaction::class);
+    }
+
+    /**
+     * Get the crypto withdrawals for the user.
+     */
+    public function cryptoWithdrawals()
+    {
+        return $this->hasMany(CryptoWithdrawal::class);
+    }
+
+    /**
+     * Get the crypto exchange orders for the user.
+     */
+    public function cryptoExchangeOrders()
+    {
+        return $this->hasMany(CryptoExchangeOrder::class);
+    }
 }
 

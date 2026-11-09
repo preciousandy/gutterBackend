@@ -15,7 +15,9 @@ class CryptoAddress extends Model
         'network',
         'address',
         'memo',
+        'quidax_address_id',
         'status',
+        'provider',
     ];
 
     public function user()

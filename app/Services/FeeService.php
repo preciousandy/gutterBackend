@@ -43,6 +43,17 @@ class FeeService
             'default_percent' => 0.00,
             'description' => 'One-time issuance fee when a customer generates a new Virtual USD card.',
         ],
+        'receive_crypto' => [
+            'key' => 'fee_receive_crypto',
+            'service_key' => 'receive_crypto',
+            'label' => 'Receive Crypto (Deposits)',
+            'category' => 'crypto',
+            'category_label' => 'Crypto Platform',
+            'icon' => '📥',
+            'default_flat' => 0.00,
+            'default_percent' => 0.00,
+            'description' => 'Platform fee on incoming blockchain cryptocurrency deposits.',
+        ],
         'send_crypto' => [
             'key' => 'fee_send_crypto',
             'service_key' => 'send_crypto',
@@ -152,6 +163,47 @@ class FeeService
             'default_percent' => 0.00,
             'description' => 'Service fee configuration',
         ];
+
+        if (in_array($cleanKey, ['receive_crypto', 'send_crypto', 'convert_crypto', 'convert_to_naira', 'buy_crypto'], true)) {
+            $cryptoServiceType = $cleanKey === 'convert_crypto' ? 'convert_to_naira' : $cleanKey;
+            try {
+                if (\Illuminate\Support\Facades\Schema::hasTable('crypto_fee_settings')) {
+                    $cryptoFee = \App\Models\CryptoFeeSetting::where('service_type', $cryptoServiceType)->first();
+                    if ($cryptoFee) {
+                        $control = AppControl::where('key', 'fee_' . $cleanKey)->orWhere('key', $serviceKey)->first();
+                        $isEnabled = (bool) $cryptoFee->is_enabled && !(bool) $cryptoFee->maintenance_mode;
+                        if ($control && !$control->is_enabled) {
+                            $isEnabled = false;
+                        }
+                        return [
+                            'key' => 'fee_' . $cleanKey,
+                            'service_key' => $cleanKey,
+                            'label' => $cryptoFee->label ?: $meta['label'],
+                            'category' => $meta['category'],
+                            'category_label' => $meta['category_label'],
+                            'icon' => $meta['icon'],
+                            'is_enabled' => $isEnabled,
+                            'maintenance_mode' => (bool) $cryptoFee->maintenance_mode,
+                            'maintenance_message' => $cryptoFee->maintenance_message,
+                            'flat_fee' => (float) $cryptoFee->fixed_fee_ngn,
+                            'fixed_fee_crypto' => (float) $cryptoFee->fixed_fee_crypto,
+                            'percent_fee' => (float) $cryptoFee->percentage_fee,
+                            'min_amount' => (float) $cryptoFee->min_amount,
+                            'max_amount' => (float) $cryptoFee->max_amount,
+                            'min_withdrawal_amount' => $cryptoFee->min_withdrawal_amount !== null ? (float) $cryptoFee->min_withdrawal_amount : null,
+                            'max_withdrawal_amount' => $cryptoFee->max_withdrawal_amount !== null ? (float) $cryptoFee->max_withdrawal_amount : null,
+                            'manual_approval_threshold' => $cryptoFee->manual_approval_threshold !== null ? (float) $cryptoFee->manual_approval_threshold : null,
+                            'supported_coins' => $cryptoFee->supported_coins,
+                            'description' => $cryptoFee->description ?: $meta['description'],
+                            'updated_by' => $cryptoFee->updated_by ?? 'System Default',
+                            'updated_at' => $cryptoFee->updated_at?->diffForHumans(),
+                        ];
+                    }
+                }
+            } catch (\Throwable $e) {
+                // Fallback to AppControl
+            }
+        }
 
         $control = AppControl::where('key', 'fee_' . $cleanKey)
             ->orWhere('key', $serviceKey)
@@ -274,6 +326,28 @@ class FeeService
         }
 
         $control->save();
+
+        if (in_array($cleanKey, ['receive_crypto', 'send_crypto', 'convert_crypto', 'convert_to_naira', 'buy_crypto'], true)) {
+            $cryptoServiceType = $cleanKey === 'convert_crypto' ? 'convert_to_naira' : $cleanKey;
+            try {
+                if (\Illuminate\Support\Facades\Schema::hasTable('crypto_fee_settings')) {
+                    $cryptoFee = \App\Models\CryptoFeeSetting::where('service_type', $cryptoServiceType)->first();
+                    if ($cryptoFee) {
+                        $cryptoFee->fixed_fee_ngn = max(0, round($flatFee, 2));
+                        $cryptoFee->percentage_fee = max(0, min(100, round($percentFee, 4)));
+                        if ($isEnabled !== null) {
+                            $cryptoFee->is_enabled = $isEnabled;
+                        }
+                        if (!empty($updatedBy)) {
+                            $cryptoFee->updated_by = $updatedBy;
+                        }
+                        $cryptoFee->save();
+                    }
+                }
+            } catch (\Throwable $e) {
+                // Ignore if table not migrated yet
+            }
+        }
 
         return $control;
     }

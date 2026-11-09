@@ -6,19 +6,25 @@ use App\Http\Controllers\Controller;
 use App\Models\AdminUser;
 use App\Models\AppControl;
 use App\Models\Complaint;
+use App\Models\CryptoFeeSetting;
+use App\Models\CryptoRefund;
+use App\Models\CryptoTransaction;
 use App\Models\KycVerification;
 use App\Models\SavingsPlan;
 use App\Models\SavingsTargetCategory;
 use App\Models\Transaction;
 use App\Models\User;
 use App\Services\BigisubService;
+use App\Services\CryptoService;
 use App\Services\FeeService;
+use App\Services\QuidaxService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\View\View;
 
 class AdminWebController extends Controller
@@ -149,6 +155,7 @@ class AdminWebController extends Controller
             ->get();
 
         $vasProvider = (string) AppControl::getSetting('vas_provider', config('services.bigisub.default_provider', 'bigisub'));
+        $cryptoMetrics = app(CryptoService::class)->getAdminCryptoMetrics();
 
         return view('admin.dashboard', compact(
             'admin',
@@ -171,7 +178,8 @@ class AdminWebController extends Controller
             'successRate',
             'openComplaints',
             'recentTransactions',
-            'vasProvider'
+            'vasProvider',
+            'cryptoMetrics'
         ));
     }
 
@@ -1029,5 +1037,329 @@ class AdminWebController extends Controller
         ]);
 
         return back()->with('success', "Admin staff member '{$validated['name']}' provisioned successfully.");
+    }
+
+    /**
+     * Crypto Transactions Management, Refunds & Fee Settings Page
+     */
+    public function cryptoManagement(Request $request): View
+    {
+        $admin = $this->getActiveAdmin($request);
+        $openComplaints = Complaint::where('status', 'open')->count();
+        $activeTab = $request->query('tab', 'transactions');
+
+        $cryptoService = app(CryptoService::class);
+        $quidaxService = app(QuidaxService::class);
+
+        $cryptoMetrics = $cryptoService->getAdminCryptoMetrics();
+        $feeSettings = Schema::hasTable('crypto_fee_settings')
+            ? CryptoFeeSetting::orderBy('id')->get()
+            : collect();
+
+        $query = CryptoTransaction::with(['user', 'withdrawal', 'exchangeOrder', 'refunds', 'auditLogs'])
+            ->orderByDesc('id');
+
+        if ($request->filled('type') && $request->query('type') !== 'all') {
+            $query->where('type', $request->query('type'));
+        }
+
+        if ($request->filled('symbol') && $request->query('symbol') !== 'all') {
+            $query->where('symbol', strtoupper($request->query('symbol')));
+        }
+
+        if ($request->filled('network') && $request->query('network') !== 'all') {
+            $query->where('network', strtoupper($request->query('network')));
+        }
+
+        if ($request->filled('status') && $request->query('status') !== 'all') {
+            $query->where('status', strtolower($request->query('status')));
+        }
+
+        if ($request->filled('search')) {
+            $search = trim($request->query('search'));
+            $query->where(function ($q) use ($search) {
+                $q->where('reference', 'like', "%{$search}%")
+                  ->orWhere('quidax_reference', 'like', "%{$search}%")
+                  ->orWhere('tx_hash', 'like', "%{$search}%")
+                  ->orWhere('wallet_address', 'like', "%{$search}%")
+                  ->orWhereHas('user', function ($uq) use ($search) {
+                      $uq->where('email', 'like', "%{$search}%")
+                         ->orWhere('first_name', 'like', "%{$search}%")
+                         ->orWhere('last_name', 'like', "%{$search}%")
+                         ->orWhere('phone', 'like', "%{$search}%");
+                  });
+            });
+        }
+
+        $cryptoTransactions = Schema::hasTable('crypto_transactions')
+            ? $query->paginate(20)->withQueryString()
+            : new \Illuminate\Pagination\LengthAwarePaginator([], 0, 20);
+
+        $recentRefunds = Schema::hasTable('crypto_refunds')
+            ? CryptoRefund::with(['user', 'cryptoTransaction'])->orderByDesc('id')->limit(10)->get()
+            : collect();
+
+        $quidaxBaseUrl = (string) AppControl::getSetting('quidax_base_url', config('services.quidax.base_url', 'https://app.quidax.io/api/v1'));
+        $quidaxSecretSet = $quidaxService->isConfigured();
+
+        return view('admin.crypto', compact(
+            'admin',
+            'openComplaints',
+            'activeTab',
+            'cryptoMetrics',
+            'feeSettings',
+            'cryptoTransactions',
+            'recentRefunds',
+            'quidaxBaseUrl',
+            'quidaxSecretSet'
+        ));
+    }
+
+    /**
+     * Update a Crypto Fee Setting from the Admin Web Portal
+     */
+    public function updateCryptoSetting(Request $request, string $serviceType): RedirectResponse|JsonResponse
+    {
+        $admin = $this->getActiveAdmin($request);
+        if (!$admin->canManageAppControls()) {
+            return back()->with('error', 'Only Super Admin can modify crypto fee configurations.');
+        }
+
+        $validated = $request->validate([
+            'percentage_fee' => 'required|numeric|min:0|max:100',
+            'fixed_fee_ngn' => 'required|numeric|min:0',
+            'fixed_fee_crypto' => 'nullable|numeric|min:0',
+            'min_amount' => 'required|numeric|min:0',
+            'max_amount' => 'required|numeric|min:0',
+            'min_withdrawal_amount' => 'nullable|numeric|min:0',
+            'max_withdrawal_amount' => 'nullable|numeric|min:0',
+            'manual_approval_threshold' => 'nullable|numeric|min:0',
+            'is_enabled' => 'nullable|boolean',
+            'maintenance_mode' => 'nullable|boolean',
+            'maintenance_message' => 'nullable|string|max:500',
+        ]);
+
+        $setting = CryptoFeeSetting::where('service_type', $serviceType)->firstOrFail();
+
+        $setting->update([
+            'percentage_fee' => $validated['percentage_fee'],
+            'fixed_fee_ngn' => $validated['fixed_fee_ngn'],
+            'fixed_fee_crypto' => $validated['fixed_fee_crypto'] ?? $setting->fixed_fee_crypto,
+            'min_amount' => $validated['min_amount'],
+            'max_amount' => $validated['max_amount'],
+            'min_withdrawal_amount' => $validated['min_withdrawal_amount'] ?? $setting->min_withdrawal_amount,
+            'max_withdrawal_amount' => $validated['max_withdrawal_amount'] ?? $setting->max_withdrawal_amount,
+            'manual_approval_threshold' => $validated['manual_approval_threshold'] ?? $setting->manual_approval_threshold,
+            'is_enabled' => $request->has('is_enabled') ? $request->boolean('is_enabled') : false,
+            'maintenance_mode' => $request->has('maintenance_mode') ? $request->boolean('maintenance_mode') : false,
+            'maintenance_message' => $validated['maintenance_message'] ?? $setting->maintenance_message,
+            'updated_by' => $admin->name,
+        ]);
+
+        $feeKey = $serviceType === 'convert_to_naira' ? 'convert_crypto' : $serviceType;
+        if (isset(FeeService::SERVICES[$feeKey])) {
+            FeeService::updateSetting(
+                $feeKey,
+                (float) $setting->fixed_fee_ngn,
+                (float) $setting->percentage_fee,
+                (bool) $setting->is_enabled && !(bool) $setting->maintenance_mode,
+                $admin->name
+            );
+        }
+
+        app(CryptoService::class)->logAudit(
+            null,
+            null,
+            'admin',
+            $admin->id,
+            $admin->name,
+            'crypto_fee_setting_updated',
+            null,
+            null,
+            "Admin {$admin->name} updated crypto fee settings for {$setting->label}.",
+            $setting->toArray()
+        );
+
+        return redirect()->route('admin.crypto', ['tab' => 'settings'])
+            ->with('success', "Crypto fee settings for '{$setting->label}' saved successfully.");
+    }
+
+    /**
+     * Update Supported Coin & Network Configuration
+     */
+    public function updateCryptoCoin(Request $request): RedirectResponse
+    {
+        $admin = $this->getActiveAdmin($request);
+        if (!$admin->canManageAppControls()) {
+            return back()->with('error', 'Only Super Admin can modify supported coins & networks.');
+        }
+
+        $validated = $request->validate([
+            'symbol' => 'required|string|max:15',
+            'coin_enabled' => 'nullable|boolean',
+            'networks' => 'nullable|array',
+        ]);
+
+        $symbol = strtoupper($validated['symbol']);
+        $coinEnabled = $request->boolean('coin_enabled');
+        $postedNetworks = $request->input('networks', []);
+
+        $settings = CryptoFeeSetting::all();
+        foreach ($settings as $setting) {
+            $coins = $setting->supported_coins ?? [];
+            if (!isset($coins[$symbol])) {
+                continue;
+            }
+
+            $coins[$symbol]['enabled'] = $coinEnabled;
+
+            if (!empty($coins[$symbol]['networks']) && is_array($coins[$symbol]['networks'])) {
+                foreach ($coins[$symbol]['networks'] as $netKey => &$netConfig) {
+                    if (isset($postedNetworks[$netKey])) {
+                        $netConfig['enabled'] = isset($postedNetworks[$netKey]['enabled']) && (bool) $postedNetworks[$netKey]['enabled'];
+                        if (isset($postedNetworks[$netKey]['network_fee'])) {
+                            $netConfig['network_fee'] = (string) $postedNetworks[$netKey]['network_fee'];
+                        }
+                        if (isset($postedNetworks[$netKey]['min_deposit'])) {
+                            $netConfig['min_deposit'] = (float) $postedNetworks[$netKey]['min_deposit'];
+                        }
+                    }
+                }
+                unset($netConfig);
+            }
+
+            $setting->update([
+                'supported_coins' => $coins,
+                'updated_by' => $admin->name,
+            ]);
+        }
+
+        return redirect()->route('admin.crypto', ['tab' => 'settings'])
+            ->with('success', "{$symbol} asset & network configurations updated across all crypto services.");
+    }
+
+    /**
+     * Update Quidax API Gateway Configuration
+     */
+    public function updateQuidaxConfig(Request $request): RedirectResponse
+    {
+        $admin = $this->getActiveAdmin($request);
+        if (!$admin->canManageAppControls()) {
+            return back()->with('error', 'Only Super Admin can update Quidax API credentials.');
+        }
+
+        $validated = $request->validate([
+            'quidax_base_url' => 'required|url',
+            'quidax_secret_key' => 'nullable|string',
+            'quidax_webhook_secret' => 'nullable|string',
+        ]);
+
+        AppControl::setSetting('quidax_base_url', rtrim(trim($validated['quidax_base_url']), '/'), [
+            'label' => 'Quidax API Base URL',
+            'category' => 'crypto_settings',
+            'updated_by' => $admin->name,
+        ]);
+
+        if (!empty($validated['quidax_secret_key'])) {
+            AppControl::setSetting('quidax_secret_key', trim($validated['quidax_secret_key']), [
+                'label' => 'Quidax API Secret Key',
+                'category' => 'crypto_settings',
+                'updated_by' => $admin->name,
+            ]);
+        }
+
+        if (!empty($validated['quidax_webhook_secret'])) {
+            AppControl::setSetting('quidax_webhook_secret', trim($validated['quidax_webhook_secret']), [
+                'label' => 'Quidax Webhook Secret',
+                'category' => 'crypto_settings',
+                'updated_by' => $admin->name,
+            ]);
+        }
+
+        return redirect()->route('admin.crypto', ['tab' => 'settings'])
+            ->with('success', 'Quidax API Gateway configuration updated successfully.');
+    }
+
+    /**
+     * Test Quidax API Connection (AJAX)
+     */
+    public function testQuidax(Request $request): JsonResponse
+    {
+        $this->getActiveAdmin($request);
+        $result = app(QuidaxService::class)->testConnection();
+
+        return response()->json($result);
+    }
+
+    /**
+     * Reconcile Pending Crypto Transactions with Quidax
+     */
+    public function reconcileCrypto(Request $request): RedirectResponse
+    {
+        $this->getActiveAdmin($request);
+        $summary = app(CryptoService::class)->reconcilePendingTransactions();
+
+        return back()->with('success', "Quidax Reconciliation completed: {$summary['checked']} pending transactions checked, {$summary['updated']} updated.");
+    }
+
+    /**
+     * Approve / Reject / Update Status of a Crypto Transaction
+     */
+    public function updateCryptoTransactionStatus(Request $request, int $id): RedirectResponse
+    {
+        $admin = $this->getActiveAdmin($request);
+        if (!$admin->canManageAppControls() && !$admin->canManageKyc() && !$admin->isSuperAdmin()) {
+            return back()->with('error', 'Unauthorized action for your role.');
+        }
+
+        $validated = $request->validate([
+            'status' => 'required|string|in:processing,successful,failed,rejected',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        try {
+            $tx = app(CryptoService::class)->updateTransactionStatusByAdmin(
+                $id,
+                $validated['status'],
+                $admin->id,
+                $admin->name,
+                $validated['reason'] ?? null
+            );
+
+            return back()->with('success', "Crypto transaction {$tx->reference} status updated to " . strtoupper($tx->status) . ".");
+        } catch (\InvalidArgumentException $e) {
+            return back()->with('error', $e->getMessage());
+        }
+    }
+
+    /**
+     * Refund an Eligible Crypto or Naira Transaction
+     */
+    public function refundCryptoTransaction(Request $request, int $id): RedirectResponse
+    {
+        $admin = $this->getActiveAdmin($request);
+        if (!$admin->canManageAppControls() && !$admin->canViewFinancials() && !$admin->isSuperAdmin()) {
+            return back()->with('error', 'Unauthorized action for your role.');
+        }
+
+        $validated = $request->validate([
+            'reason' => 'required|string|min:5|max:500',
+        ]);
+
+        try {
+            $result = app(CryptoService::class)->refundTransaction(
+                $id,
+                $admin->id,
+                $admin->name,
+                $validated['reason']
+            );
+
+            return back()->with(
+                'success',
+                "Refund processed! Returned {$result['amount_refunded']} {$result['asset_refunded']} to customer's wallet (Refund Ref: {$result['refund']->refund_reference})."
+            );
+        } catch (\InvalidArgumentException $e) {
+            return back()->with('error', $e->getMessage());
+        }
     }
 }
