@@ -44,7 +44,7 @@ return [
 
     'bigisub' => [
         'base_url' => env('BIGISUB_BASE_URL', 'https://api.bigisub.ng/'),
-        'api_key' => env('BIGISUB_API_KEY', 'f89dca9d3c0814c375320ddfda09d91ce0bb10e5'),
+        'api_key' => env('BIGISUB_API_KEY', '14130582506a16147f5b7584b98f886bc1a9f915'),
         'pin' => env('BIGISUB_PIN', ''),
         'default_provider' => env('VAS_DEFAULT_PROVIDER', 'bigisub'),
     ],
