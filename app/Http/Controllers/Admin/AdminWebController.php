@@ -1099,7 +1099,7 @@ class AdminWebController extends Controller
             ? CryptoRefund::with(['user', 'cryptoTransaction'])->orderByDesc('id')->limit(10)->get()
             : collect();
 
-        $quidaxBaseUrl = (string) AppControl::getSetting('quidax_base_url', config('services.quidax.base_url', 'https://app.quidax.io/api/v1'));
+        $quidaxBaseUrl = (string) AppControl::getSetting('quidax_base_url', config('services.quidax.base_url', 'https://openapi.quidax.io/exchange-open-api/api/v1'));
         $quidaxSecretSet = $quidaxService->isConfigured();
 
         return view('admin.crypto', compact(

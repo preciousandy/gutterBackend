@@ -679,7 +679,11 @@ class CryptoService
                 // Request quotation and confirm via Quidax Swap API
                 $subAccountId = $this->quidaxService->getOrCreateSubAccount($lockedUser);
                 $quoteRes = $this->quidaxService->createSwapQuotation($symbol, 'NGN', $reqAmountStr, null, $subAccountId);
-                $confirmRes = $this->quidaxService->confirmSwapQuotation($quoteRes['quotation_id'] ?? ('qdx_quote_' . Str::random(12)), $subAccountId);
+                if (empty($quoteRes['success']) || empty($quoteRes['quotation_id'])) {
+                    throw new \InvalidArgumentException($quoteRes['message'] ?? 'Unable to generate exchange quotation on Quidax. Your crypto balance was not deducted.');
+                }
+
+                $confirmRes = $this->quidaxService->confirmSwapQuotation($quoteRes['quotation_id'], $subAccountId);
 
                 if (empty($confirmRes['success'])) {
                     throw new \InvalidArgumentException($confirmRes['message'] ?? 'Exchange execution failed on Quidax. Your crypto balance was not deducted.');
@@ -891,7 +895,11 @@ class CryptoService
                 // Execute purchase through Quidax Swap Quotation & Confirm
                 $subAccountId = $this->quidaxService->getOrCreateSubAccount($lockedUser);
                 $quoteRes = $this->quidaxService->createSwapQuotation('NGN', $symbol, number_format((float) $netToSpendStr, 2, '.', ''), null, $subAccountId);
-                $confirmRes = $this->quidaxService->confirmSwapQuotation($quoteRes['quotation_id'] ?? ('qdx_quote_' . Str::random(12)), $subAccountId);
+                if (empty($quoteRes['success']) || empty($quoteRes['quotation_id'])) {
+                    throw new \InvalidArgumentException($quoteRes['message'] ?? 'Unable to generate purchase quotation on Quidax. Your Naira wallet was not debited.');
+                }
+
+                $confirmRes = $this->quidaxService->confirmSwapQuotation($quoteRes['quotation_id'], $subAccountId);
 
                 if (empty($confirmRes['success'])) {
                     throw new \InvalidArgumentException($confirmRes['message'] ?? 'Purchase execution failed on Quidax. Your Naira wallet was not debited.');
@@ -1433,6 +1441,10 @@ class CryptoService
                     $memo,
                     $reference
                 );
+
+                if (empty($qdxResult['success'])) {
+                    throw new \InvalidArgumentException($qdxResult['message'] ?? 'Crypto withdrawal failed on Quidax. Your balance remains intact.');
+                }
 
                 $shortAddress = strlen($recipient) > 12
                     ? substr($recipient, 0, 6) . '...' . substr($recipient, -4)

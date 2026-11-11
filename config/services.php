@@ -38,7 +38,7 @@ return [
     'quidax' => [
         'secret_key' => env('QUIDAX_SECRET_KEY'),
         'public_key' => env('QUIDAX_PUBLIC_KEY'),
-        'base_url' => env('QUIDAX_BASE_URL', 'https://www.quidax.com/api/v1'),
+        'base_url' => env('QUIDAX_BASE_URL', 'https://openapi.quidax.io/exchange-open-api/api/v1'),
         'webhook_secret' => env('QUIDAX_WEBHOOK_SECRET'),
     ],
 
@@ -62,7 +62,7 @@ return [
         'private_key' => env('PALMPAY_MERCHANT_PRIVATE_KEY_BASE64'),
         'public_key' => env('PALMPAY_PLATFORM_PUBLIC_KEY'),
         'country_code' => env('PALMPAY_COUNTRY_CODE', 'NG'),
-        'webhook_url' => env('PALMPAY_WEBHOOK_URL', 'https://cloudnet.icu/api/v1/webhooks/palmpay'),
+        'webhook_url' => env('PALMPAY_WEBHOOK_URL', 'https://app.may22sim.com/api/v1/webhooks/palmpay'),
     ],
 
     'prembly' => [

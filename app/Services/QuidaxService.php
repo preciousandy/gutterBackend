@@ -10,6 +10,8 @@ use Illuminate\Support\Str;
 
 class QuidaxService
 {
+    public const DEFAULT_BASE_URL = 'https://openapi.quidax.io/exchange-open-api/api/v1';
+
     protected ?string $secretKey;
     protected ?string $publicKey;
     protected string $baseUrl;
@@ -19,7 +21,7 @@ class QuidaxService
     {
         $this->secretKey = config('services.quidax.secret_key');
         $this->publicKey = config('services.quidax.public_key');
-        $this->baseUrl = rtrim(config('services.quidax.base_url', 'https://openapi.quidax.io/api/v1'), '/');
+        $this->baseUrl = $this->normalizeBaseUrl((string) config('services.quidax.base_url', self::DEFAULT_BASE_URL));
         $this->webhookSecret = config('services.quidax.webhook_secret');
 
         // Allow runtime override from Admin Settings if stored in AppControl
@@ -37,7 +39,7 @@ class QuidaxService
                     $this->publicKey = $dbPublic;
                 }
                 if (!empty($dbBaseUrl) && is_string($dbBaseUrl)) {
-                    $this->baseUrl = rtrim($dbBaseUrl, '/');
+                    $this->baseUrl = $this->normalizeBaseUrl($dbBaseUrl);
                 }
                 if (!empty($dbWebhook) && is_string($dbWebhook)) {
                     $this->webhookSecret = $dbWebhook;
@@ -46,6 +48,50 @@ class QuidaxService
         } catch (\Throwable $e) {
             // Ignore during migrations
         }
+    }
+
+    /**
+     * Normalize legacy or incomplete Quidax base URLs to the official OpenAPI v1 endpoint.
+     */
+    protected function normalizeBaseUrl(?string $url): string
+    {
+        $trimmed = rtrim(trim((string) $url), '/');
+        if ($trimmed === '') {
+            return self::DEFAULT_BASE_URL;
+        }
+
+        $legacyUrls = [
+            'https://www.quidax.com/api/v1',
+            'https://app.quidax.io/api/v1',
+            'https://api.quidax.com/v1',
+            'https://openapi.quidax.io/api/v1',
+        ];
+
+        if (in_array(strtolower($trimmed), $legacyUrls, true)) {
+            return self::DEFAULT_BASE_URL;
+        }
+
+        return $trimmed;
+    }
+
+    /**
+     * Determine whether live Quidax HTTP execution should run instead of test simulation.
+     */
+    protected function shouldExecuteLive(): bool
+    {
+        return $this->isConfigured() && !app()->environment('testing');
+    }
+
+    /**
+     * Resolve sub-account or fallback placeholder ID to a valid Quidax user_id path parameter.
+     */
+    protected function resolveTargetUser(?string $quidaxUserId): string
+    {
+        if (empty($quidaxUserId) || str_starts_with($quidaxUserId, 'quidax_user_')) {
+            return 'me';
+        }
+
+        return $quidaxUserId;
     }
 
     /**
@@ -58,15 +104,19 @@ class QuidaxService
 
     /**
      * Get or create a dedicated Quidax sub-account for a Gutter user.
+     * Falls back cleanly to 'me' if the merchant account is not registered for sub-accounts (E0106).
      * Endpoint: POST /users
      */
     public function getOrCreateSubAccount(User $user): string
     {
-        if (!empty($user->quidax_user_id)) {
+        if (!empty($user->quidax_user_id) && !str_starts_with($user->quidax_user_id, 'quidax_user_')) {
             return $user->quidax_user_id;
         }
 
-        if (!$this->isConfigured()) {
+        if (!$this->shouldExecuteLive()) {
+            if (!empty($user->quidax_user_id)) {
+                return $user->quidax_user_id;
+            }
             $sandboxId = 'quidax_user_' . str_pad((string) $user->id, 8, '0', STR_PAD_LEFT);
             $user->update(['quidax_user_id' => $sandboxId]);
             return $sandboxId;
@@ -90,6 +140,14 @@ class QuidaxService
                     return $quidaxId;
                 }
             } else {
+                $errorCode = $response->json('data.code');
+
+                // Non-business accounts cannot create sub-accounts on Quidax (E0106); use authenticated master wallet ('me').
+                if ($response->status() === 403 && $errorCode === 'E0106') {
+                    $user->update(['quidax_user_id' => 'me']);
+                    return 'me';
+                }
+
                 // If user already exists on Quidax, attempt to fetch by email
                 $fetchRes = Http::withToken($this->secretKey)
                     ->acceptJson()
@@ -111,10 +169,7 @@ class QuidaxService
             Log::error('Quidax user creation exception: ' . $e->getMessage());
         }
 
-        // Fallback subaccount ID if API connection is not reachable
-        $fallbackId = 'quidax_user_' . str_pad((string) $user->id, 8, '0', STR_PAD_LEFT);
-        $user->update(['quidax_user_id' => $fallbackId]);
-        return $fallbackId;
+        return 'me';
     }
 
     /**
@@ -182,14 +237,18 @@ class QuidaxService
         $symbol = strtolower($symbol);
         $networkKey = strtolower($network);
         $subAccountId = $this->getOrCreateSubAccount($user);
+        $targetUser = $this->resolveTargetUser($subAccountId);
 
-        if ($this->isConfigured() && !str_starts_with($subAccountId, 'quidax_user_')) {
+        if ($this->shouldExecuteLive()) {
+            $lastError = 'Unable to retrieve deposit address from Quidax.';
+            $lastStatus = 0;
+
             try {
                 // 1. Try GET /users/{user_id}/wallets/{currency}/addresses
                 $listRes = Http::withToken($this->secretKey)
                     ->acceptJson()
                     ->timeout(10)
-                    ->get("{$this->baseUrl}/users/{$subAccountId}/wallets/{$symbol}/addresses");
+                    ->get("{$this->baseUrl}/users/{$targetUser}/wallets/{$symbol}/addresses");
 
                 if ($listRes->successful()) {
                     $items = $listRes->json('data') ?? [];
@@ -207,34 +266,43 @@ class QuidaxService
                             }
                         }
                     }
+                } else {
+                    $lastStatus = $listRes->status();
+                    $lastError = $listRes->json('message') ?? $lastError;
                 }
 
                 // 2. Try GET /users/{user_id}/wallets/{currency}/address?network={network}
                 $response = Http::withToken($this->secretKey)
                     ->acceptJson()
                     ->timeout(10)
-                    ->get("{$this->baseUrl}/users/{$subAccountId}/wallets/{$symbol}/address", [
+                    ->get("{$this->baseUrl}/users/{$targetUser}/wallets/{$symbol}/address", [
                         'network' => $networkKey,
                     ]);
 
                 if ($response->successful()) {
                     $data = $response->json('data');
                     if (!empty($data['address'])) {
-                        return [
-                            'address' => $data['address'],
-                            'memo' => $data['destination_tag'] ?? $data['memo'] ?? null,
-                            'quidax_address_id' => $data['id'] ?? null,
-                            'provider' => 'quidax',
-                            'raw' => $data,
-                        ];
+                        $dataNet = strtolower((string) ($data['network'] ?? ''));
+                        if (empty($dataNet) || $dataNet === $networkKey || $targetUser === 'me') {
+                            return [
+                                'address' => $data['address'],
+                                'memo' => $data['destination_tag'] ?? $data['memo'] ?? null,
+                                'quidax_address_id' => $data['id'] ?? null,
+                                'provider' => 'quidax',
+                                'raw' => $data,
+                            ];
+                        }
                     }
+                } else {
+                    $lastStatus = $response->status();
+                    $lastError = $response->json('message') ?? $lastError;
                 }
 
                 // 3. Create payment address: POST /users/{user_id}/wallets/{currency}/addresses
                 $genResponse = Http::withToken($this->secretKey)
                     ->acceptJson()
                     ->timeout(12)
-                    ->post("{$this->baseUrl}/users/{$subAccountId}/wallets/{$symbol}/addresses?network={$networkKey}", [
+                    ->post("{$this->baseUrl}/users/{$targetUser}/wallets/{$symbol}/addresses?network={$networkKey}", [
                         'network' => $networkKey,
                     ]);
 
@@ -249,13 +317,27 @@ class QuidaxService
                             'raw' => $data,
                         ];
                     }
+                } else {
+                    $lastStatus = $genResponse->status();
+                    $lastError = $genResponse->json('message') ?? $lastError;
                 }
+
+                Log::error('Quidax getDepositAddress failed', [
+                    'target_user' => $targetUser,
+                    'symbol' => $symbol,
+                    'network' => $networkKey,
+                    'status' => $lastStatus,
+                    'message' => $lastError,
+                ]);
             } catch (\Throwable $e) {
-                Log::warning('Quidax getDepositAddress exception: ' . $e->getMessage());
+                $lastError = $e->getMessage();
+                Log::error('Quidax getDepositAddress exception: ' . $lastError);
             }
+
+            throw new \RuntimeException("Quidax deposit address retrieval failed: {$lastError}");
         }
 
-        // Compliant deterministic address for local development, sandbox and offline resilience
+        // Compliant deterministic address for unit tests & unconfigured local development
         $hash = hash('sha256', "quidax_{$subAccountId}_{$symbol}_{$network}_gutter_salt");
 
         if (strtoupper($network) === 'TRC20') {
@@ -373,9 +455,9 @@ class QuidaxService
             $payload['to_amount'] = $toAmount;
         }
 
-        if ($this->isConfigured()) {
+        if ($this->shouldExecuteLive()) {
             try {
-                $targetUser = str_starts_with($quidaxUserId, 'quidax_user_') ? 'me' : $quidaxUserId;
+                $targetUser = $this->resolveTargetUser($quidaxUserId);
                 $response = Http::withToken($this->secretKey)
                     ->acceptJson()
                     ->timeout(10)
@@ -394,8 +476,29 @@ class QuidaxService
                         'raw' => $data,
                     ];
                 }
+
+                $errorMsg = $response->json('message') ?? 'Quidax swap quotation failed (HTTP ' . $response->status() . ').';
+                Log::warning('Quidax createSwapQuotation failed', [
+                    'status' => $response->status(),
+                    'body' => $response->body(),
+                    'payload' => $payload,
+                ]);
+
+                return [
+                    'success' => false,
+                    'message' => $errorMsg,
+                    'provider' => 'quidax',
+                    'raw' => $response->json() ?? ['status' => $response->status(), 'body' => $response->body()],
+                ];
             } catch (\Throwable $e) {
-                Log::warning('Quidax createSwapQuotation exception: ' . $e->getMessage());
+                Log::error('Quidax createSwapQuotation exception: ' . $e->getMessage());
+
+                return [
+                    'success' => false,
+                    'message' => 'Unable to reach Quidax swap quotation service: ' . $e->getMessage(),
+                    'provider' => 'quidax',
+                    'raw' => ['error' => $e->getMessage()],
+                ];
             }
         }
 
@@ -413,9 +516,17 @@ class QuidaxService
      */
     public function confirmSwapQuotation(string $quotationId, string $quidaxUserId = 'me'): array
     {
-        if ($this->isConfigured() && !str_starts_with($quotationId, 'qdx_quote_')) {
+        if ($this->shouldExecuteLive()) {
+            if (empty($quotationId) || str_starts_with($quotationId, 'qdx_quote_')) {
+                return [
+                    'success' => false,
+                    'status' => 'failed',
+                    'message' => 'Valid Quidax quotation ID is required for live swap execution.',
+                ];
+            }
+
             try {
-                $targetUser = str_starts_with($quidaxUserId, 'quidax_user_') ? 'me' : $quidaxUserId;
+                $targetUser = $this->resolveTargetUser($quidaxUserId);
                 $response = Http::withToken($this->secretKey)
                     ->acceptJson()
                     ->timeout(15)
@@ -434,11 +545,17 @@ class QuidaxService
                     ];
                 }
 
+                Log::warning('Quidax confirmSwapQuotation failed', [
+                    'status' => $response->status(),
+                    'body' => $response->body(),
+                    'quotation_id' => $quotationId,
+                ]);
+
                 return [
                     'success' => false,
                     'status' => 'failed',
                     'message' => $response->json('message') ?? 'Quidax swap confirmation failed.',
-                    'raw' => $response->json(),
+                    'raw' => $response->json() ?? ['status' => $response->status(), 'body' => $response->body()],
                 ];
             } catch (\Throwable $e) {
                 Log::error('Quidax confirmSwapQuotation exception: ' . $e->getMessage());
@@ -564,21 +681,19 @@ class QuidaxService
         $subAccountId = $this->getOrCreateSubAccount($user);
         $reference = $reference ?: 'GTR_WD_' . strtoupper(Str::random(12));
 
-        if ($this->isConfigured()) {
+        if ($this->shouldExecuteLive()) {
             try {
-                $targetUser = str_starts_with($subAccountId, 'quidax_user_') ? 'me' : $subAccountId;
+                $targetUser = $this->resolveTargetUser($subAccountId);
                 $payload = [
                     'currency' => $symbol,
                     'amount' => number_format($amount, 8, '.', ''),
                     'fund_uid' => $recipientAddress,
-                    'recipient' => $recipientAddress, // compatibility across Quidax v1/v3
                     'network' => $networkKey,
                     'reference' => $reference,
                     'transaction_note' => "Gutter withdrawal for User #{$user->id}",
                     'narration' => "Crypto withdrawal to {$recipientAddress}",
                 ];
                 if (!empty($memo)) {
-                    $payload['destination_tag'] = $memo;
                     $payload['fund_uid2'] = $memo;
                 }
 
@@ -599,16 +714,35 @@ class QuidaxService
                     ];
                 }
 
+                $errorMsg = $response->json('message') ?? 'Quidax withdrawal failed (HTTP ' . $response->status() . ').';
                 Log::warning('Quidax withdrawal failed', [
+                    'target_user' => $targetUser,
                     'status' => $response->status(),
                     'body' => $response->body(),
+                    'payload' => $payload,
                 ]);
+
+                return [
+                    'success' => false,
+                    'status' => 'failed',
+                    'message' => $errorMsg,
+                    'provider' => 'quidax',
+                    'raw' => $response->json() ?? ['status' => $response->status(), 'body' => $response->body()],
+                ];
             } catch (\Throwable $e) {
                 Log::error('Quidax withdrawal exception: ' . $e->getMessage());
+
+                return [
+                    'success' => false,
+                    'status' => 'failed',
+                    'message' => 'Unable to reach Quidax withdrawal service: ' . $e->getMessage(),
+                    'provider' => 'quidax',
+                    'raw' => ['error' => $e->getMessage()],
+                ];
             }
         }
 
-        // Compliant simulation fallback for development and testing
+        // Compliant simulation fallback for unit tests & unconfigured development
         return [
             'success' => true,
             'quidax_id' => 'qdx_wd_' . Str::random(14),
